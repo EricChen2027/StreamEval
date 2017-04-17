@@ -193,7 +193,6 @@ JSONCPP_STRING StreamEval(char* RTMP_URL, const char* filePath, char* fileSubNam
 	sprintf(flvFileName, "%s%s.flv", filePath, fileSubName);
 	sprintf(h264FileName, "%s%s.h264", filePath, fileSubName);
 	sprintf(outFileName, "%s%s.result", filePath, fileSubName);
-	JSONCPP_STRING mediaEvalInfo;
 	
 	do {
 		// 靠靠
@@ -263,28 +262,28 @@ JSONCPP_STRING StreamEval(char* RTMP_URL, const char* filePath, char* fileSubNam
 			printf("The H264/H265 StreamData Formated Failed: %s\n", GetErrorMsg(eRet).c_str());
 		}
 #endif
-
-		//校验视频文件的统计信息
-		FLV_STAT_INFO statInfo;
-		if (STREAM_OK == eRet) {
-			eRet |= CheckFlvDataInfo(statInfo);
-			eRet |= CheckStreamDataInfo(statInfo.frameAbnormal);
-			GetVideoStreamInfo(statInfo);
-
-			PrintStaticInfo(&statInfo);
-			if (STREAM_OK != eRet) {
-				printf("\n");
-				printf("The Statistic Information of Stream Got an Exception: %s\n", GetErrorMsg(eRet).c_str());
-			}
-		}
-
-		FLV_TAG_INFO flvTagInfo = GetFlvTagInfo();
-		vector<STREAM_SLICE_INFO> streamInfo = GetStreamInfo();
-		MEDIA_INFO mediaInfo = GetMediaInfo();
-		mediaEvalInfo = GenMediaInfo(eRet, flvTagInfo, streamInfo, statInfo, mediaInfo, flvFileName);
 	}while(false);
 
-	//清理资源
+	//static
+	FLV_STAT_INFO statInfo;
+	if (STREAM_OK == eRet) {
+		eRet |= CheckFlvDataInfo(statInfo);
+		eRet |= CheckStreamDataInfo(statInfo.frameAbnormal);
+		GetVideoStreamInfo(statInfo);
+
+		PrintStaticInfo(&statInfo);
+		if (STREAM_OK != eRet) {
+			printf("\n");
+			printf("The Statistic Information of Stream Got an Exception: %s\n", GetErrorMsg(eRet).c_str());
+		}
+	}
+
+	FLV_TAG_INFO flvTagInfo = GetFlvTagInfo();
+	vector<STREAM_SLICE_INFO> streamInfo = GetStreamInfo();
+	MEDIA_INFO mediaInfo = GetMediaInfo();
+	JSONCPP_STRING mediaEvalInfo = GenMediaInfo(eRet, flvTagInfo, streamInfo, statInfo, mediaInfo, flvFileName);
+
+	//clean
 	if (flvFile) {
 		fclose(flvFile);
 		flvFile = NULL;
