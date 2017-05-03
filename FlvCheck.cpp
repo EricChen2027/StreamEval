@@ -1,302 +1,443 @@
-#include "FlvCheck.h"
-#include "pauta.h"
+//
+//  FlvCheck.cpp
+//  streamEval
+//
+//  Created by chenyu on 17/4/18.
+//  Copyright ¬© 2017Âπ¥ chenyu. All rights reserved.
+//
+#include <string.h>
+#include <math.h>
 
-/**
-  *	@ –£—ÈFlv∞¸Õ∑
-  *	@ in	FILE*	flvFile
-  * @ inout File**	h264file
-  * 
-  * @ return check result
-  */
-unsigned int CheckFlvFile(FILE* flvFile, FILE** h264File){
-	//clear the statinfo;
-	flvTagInfo.clear();
-		
-	fseek(flvFile, 0, SEEK_END);
-	if (ftell(flvFile) <= 0) {
+#include "FlvCheck.hpp"
+
+unsigned int ParseFlvFile(FILE* flvFile, FILE** H264file, FLV_HEADER& header, vector<FLV_TAG>& vFlvTag) {
+    if (NULL == flvFile || NULL == *H264file) {
+        return FILE_NOT_EXSIT;
+    }
+    //empty file
+    fseek(flvFile, 0, SEEK_END);
+    if (ftell(flvFile) <= 0) {
+        return STREAM_OK;
+    }
+    
+    //parse file
+    fseek(flvFile, 0, SEEK_SET);
+    unsigned int iRet = ParseHead(flvFile, header);
+    if (STREAM_OK == iRet) {
+        //‰∏çÂåÖÂê´header,seek back
+        if ((header.Signature[2] != (uint32_t)'f' && header.Signature[2] != (uint32_t)'F') ||
+            (header.Signature[1] != (uint32_t)'l' && header.Signature[1] != (uint32_t)'L') ||
+            (header.Signature[0] != (uint32_t)'v' && header.Signature[0] != (uint32_t)'V')) {
+            
+            //seek back
+            fseek(flvFile, 0, SEEK_SET);
+        }
+        
+        vFlvTag.clear();
+        iRet = ParseBody(flvFile, H264file, vFlvTag);
+    }
+    
+    return iRet;
+}
+
+
+unsigned int ParseFlvFile(void* buffer, long length, FILE** H264file, FLV_HEADER& header, vector<FLV_TAG>& vFlvTag, long& bufferRead) {
+	if (NULL == *H264file) {
+		return FILE_NOT_EXSIT;
+	}
+	//empty buffer
+	if (NULL == buffer || 0 == length) {
 		return STREAM_OK;
 	}
-	fseek(flvFile, 0, SEEK_SET);
-
-	videoNum = 0;
-	audioNum = 0;
-
-	uint32_t bodyType = 0;
-	unsigned int eRet = STREAM_OK;
-	eRet = CheckHead(flvFile, bodyType);
-
-	if (STREAM_OK == eRet) {
-		eRet = CheckBody(flvFile, h264File, bodyType);
+	
+	//parse file
+	unsigned int iRet = ParseHead(buffer, length, header, bufferRead);
+	if (STREAM_OK == iRet) {
+		vFlvTag.clear();
+		iRet = ParseBody(buffer, length, H264file, vFlvTag, bufferRead);
 	}
-
-	return eRet;
+	
+    return iRet;
 }
-/**
-  *	@ –£—ÈFlv∞¸Õ∑
-  * @ in	FILE*		flvFile
-  * @ inout uint32_t	bodyType
-  * 
-  * @ return check result
-  */
-unsigned int CheckHead(FILE* flvFile, uint32_t& bodyType) {
-	//–£—È°∞FLV°±◊÷∂Œ
+
+unsigned int ParseHead(FILE* flvFile, FLV_HEADER& header) {
+    if (NULL == flvFile) {
+        return FILE_NOT_EXSIT;
+    }
+   
+    //READ BUFFER
+	//‚ÄúFLV‚Äù
 	uint32_t fileType;
 	if (!ReadU24(&fileType, flvFile) || ((fileType != (uint32_t)'flv') && fileType != (uint32_t)'FLV')) {
 		return FLV_HEADER_ERROR;
 	}
-	//ªÒ»°FLV∞Ê±æ∫≈
+	//FLV version
 	uint32_t flvVer;
 	if (!ReadU8(&flvVer, flvFile)) {
 		return FLV_HEADER_ERROR;
 	}
-	//ªÒ»°bodyƒ⁄»› «∑Ò∞¸∫¨“Ù°¢ ”∆µ
+	//dose body have video or audio 
+	uint32_t bodyType = 0;
 	if (!ReadU8(&bodyType, flvFile)) {
 		return FLV_HEADER_ERROR;
 	}
-	//–£—Èhead≥§∂»
+	//check head length
 	uint32_t headLength;
 	if (!ReadU32(&headLength, flvFile) || headLength != 9) {
 		return FLV_HEADER_ERROR;
 	}
+	memcpy(header.Signature, &fileType, 3);
+	header.Version = flvVer;
+	header.Flags = bodyType;
+	header.DataOffset = headLength;
+    
+	return STREAM_OK;
+}
+
+unsigned int ParseHead(void* buffer, long length, FLV_HEADER& header, long& bufferRead) {
+	if (NULL == buffer || 0 == length) {
+		return DATA_BUFFER_NULL;
+	}
+
+	//READ BUFFER
+	//‚ÄúFLV‚Äù
+	uint32_t fileType;
+	memcpy(&header, buffer, sizeof(FLV_HEADER));
+	if ((header.Signature[0] != 'f' && header.Signature[0] != 'F') ||
+		(header.Signature[1] != 'l' && header.Signature[1] != 'L') ||
+		(header.Signature[2] != 'v' && header.Signature[2] != 'V') ||
+		(header.DataOffset != 9)) {
+		return FLV_HEADER_ERROR;
+	}
+	bufferRead = 9;
 
 	return STREAM_OK;
 }
 
-/**
-  *	@ –£—ÈFlv Body
-  * @ in	FILE*		flvFile
-  * @ in	uint32_t	bodyType(0000 0101:“Ù°¢ ”∆µ
-  								 0000 0100:“Ù∆µ
-  								 0000 0001: ”∆µ£©
-  *
-  * @ return check result
-  */
-unsigned int CheckBody(FILE* flvFile, FILE** h264File, uint32_t bodyType) {
-	unsigned int eRet = STREAM_OK;
-	if (!flvFile) {
+unsigned int ParseBody(FILE* flvFile, FILE** H264file, vector<FLV_TAG>& vFlvTag) {
+    if (NULL == flvFile || NULL == *H264file) {
+        return FILE_NOT_EXSIT;
+    }
+    
+    unsigned int iRet = STREAM_OK;
+    FLV_TAG tagItem;
+	uint32_t preTagSize = 0;
+	uint32_t dataSize = 0;
+
+    //jump over previousTagSize0
+    fseek(flvFile, 4, SEEK_CUR);
+	int count = 0;
+    while(true) {
+        //end
+        if (feof(flvFile)) {
+            break;
+        }
+        
+        //read a single tag 
+		memset(&tagItem, 0, sizeof(tagItem));
+        if (!ReadU8((uint32_t*)&tagItem.TagType, flvFile)) {
+			if (feof(flvFile)) {
+				break;
+			}
+            iRet = FILE_READ_ERROR;
+            break;
+        }
+        //tagtype == 8||9||18
+        if (TAG_TYPE_AUDIO != tagItem.TagType &&
+            TAG_TYPE_VIDEO != tagItem.TagType &&
+            TAG_TYPE_SCRIPT != tagItem.TagType) {
+            iRet = FLV_VIDEOTAG_UNKNOWN;
+            break;
+        }
+		count++;
+		//data size
+        if (!ReadU24((uint32_t*)&tagItem.DataSize, flvFile)) {
+            iRet = FILE_READ_ERROR;
+            break;
+        }
+        //timestamp
+        if (!ReadU24((uint32_t*)&tagItem.Timestamp, flvFile)) {
+            iRet = FILE_READ_ERROR;
+            break;
+        }
+        if (!ReadU8((uint32_t*)&tagItem.TimestampExt, flvFile)) {
+            iRet = FILE_READ_ERROR;
+            break;
+        }
+        //streamid
+        if (!ReadU24((uint32_t*)&tagItem.StreamID, flvFile)) {
+            iRet = FILE_READ_ERROR;
+            break;
+        }
+        
+        //push back
+        vFlvTag.push_back(tagItem);
+        
+        //jump over non_audio and non_video frame
+        //jump over next previousTagSizen at the same time
+		//small end
+		dataSize = (tagItem.DataSize[2] << 16 & 0xff0000) | (tagItem.DataSize[1] << 8 & 0xff00) | (tagItem.DataSize[0] & 0xff);
+        if (tagItem.TagType != TAG_TYPE_AUDIO &&
+            tagItem.TagType != TAG_TYPE_VIDEO) {
+            fseek(flvFile, dataSize, SEEK_CUR);
+            fseek(flvFile, 4, SEEK_CUR);
+            continue;
+        }
+        //decode
+        iRet = ParseBodyTag(flvFile, H264file, tagItem.TagType, dataSize);
+        if (STREAM_OK != iRet) {
+            break;
+        }
+        
+        //check previousTagSizeN        
+        if (!ReadU32(&preTagSize, flvFile)) {
+            if (!feof(flvFile)) {
+                iRet = FILE_READ_ERROR;
+            }
+            break;
+        }else if(preTagSize != (dataSize + 11)){
+            iRet = FLV_TAGSIZE_NOTMATCH;
+            break;
+        }
+	 }
+
+    return iRet;
+}
+unsigned int ParseBody(void* buffer, long length, FILE** H264file, vector<FLV_TAG>& vFlvTag, long& bufferRead) {
+	if (NULL == buffer || 0 == length) {
+		return DATA_BUFFER_NULL;
+	}
+	if (NULL == *H264file) {
 		return FILE_NOT_EXSIT;
 	}
 
+	unsigned int iRet = STREAM_OK;
+	FLV_TAG tagItem;
+	uint32_t preTagSize = 0;
+	uint32_t dataSize = 0;
+
 	//jump over previousTagSize0
-	fseek(flvFile, 4, SEEK_CUR);
-	//
-	uint32_t type		= 0;
-	uint32_t dataLength = 0;
-	uint32_t timeStamp	= 0;
-	uint32_t timeStampExt = 0;
-	uint32_t vTimeStampReal = 0;
-	uint32_t aTimeStampReal = 0;
-	uint32_t lastVideoTimeStamp = 0;
-	uint32_t lastAudioTimeStamp = 0;
-	//use to cal video
-	uint32_t vValidTimeNum = 0;
-	uint32_t vValidTimeSum = 0;
-	uint32_t vValidTimeStart = 0;
-	vValidTime.clear();
-	//used to cal audio
-	uint32_t aValidTimeNum = 0;
-	uint32_t aValidTimeSum = 0;
-	uint32_t aValidTimeStart = 0;
-	aValidTime.clear();
-	syncInfo.clear();
-	//used to cal size(audio + video + script)
-	uint32_t mediaSize = 0;
+	bufferRead += 4;
+	int count = 0;
+	int sizeOfTag = 11;			//basic tag info size
+	byte* pointer = (byte*)buffer + bufferRead;
+	while(bufferRead + sizeOfTag < length) {
+		//read a single tag 
+		memset(&tagItem, 0, sizeof(tagItem));
+		memcpy(&tagItem.TagType, pointer, 1);
+		bufferRead += 1;
+		pointer += 1;
 
-	uint32_t streamid	= 0;
-	uint32_t tagNum		= 0;
-	void* pbuf = NULL;
-	char* realTime = (char*)malloc(20);
-	memset(realTime, 0, 20);
-	printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
-	printf("|                               Flv Tag Info                                         |\n");
-	printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
-	printf("|TagNum    |TagType   |TagSize    |TimeStamp   |timeStampExt |TimeStampSub |StreamID |\n");
-	while(true) {
-		if (!ReadU8(&type, flvFile)) {
-			if (!feof(flvFile)) {
-				eRet = FILE_READ_ERROR;
-			}else {
-				eRet = STREAM_OK;
-			}
-			break;
-		}
-		if (TAG_TYPE_AUDIO != type && TAG_TYPE_VIDEO != type && TAG_TYPE_SCRIPT != type) {
-			break;
-		}
-		if (!ReadU24(&dataLength, flvFile)) {
-			if (!feof(flvFile)) {
-				eRet = FILE_READ_ERROR;
-			}
-			break;
-		}
-		mediaSize += dataLength;
-		/*
-		if (!ReadTime(&timeStamp, inFile)) {
-			eRet = false;
-			break;
-		}*/
-		if (!ReadU24(&timeStamp, flvFile)) {
-			if (!feof(flvFile)) {
-				eRet = FILE_READ_ERROR;
-			}
-			break;
-		}
-		if (!ReadU8(&timeStampExt, flvFile)) {
-			if (!feof(flvFile)) {
-				eRet = FILE_READ_ERROR;
-			}
-			break;
-		}
-		if (!ReadU24(&streamid, flvFile)) {
-			if (!feof(flvFile)) {
-				eRet = FILE_READ_ERROR;
-			}
-			break;
-		}else if (streamid != 0) {
-			eRet = FLV_STREAMID_NOTZERO;
-			break;
-		}
-		tagNum++;
-		
-		//caculate fps
-		if (TAG_TYPE_VIDEO == type) {
-			lastVideoTimeStamp = vTimeStampReal;
-			vTimeStampReal = (timeStampExt << 24) | timeStamp;
-			if (0 == vValidTimeStart){
-				vValidTimeStart = vTimeStampReal;
-			}else {
-				if (0 != vTimeStampReal - lastVideoTimeStamp) {
-					vValidTime.push_back(vTimeStampReal - lastVideoTimeStamp);
-				}
-			}
-			if (0 != vTimeStampReal) {
-				vValidTimeNum++;
-				vValidTimeSum = vTimeStampReal - vValidTimeStart;
-				averageTime = vValidTimeSum / vValidTimeNum;
-			}
+		memcpy(&tagItem.DataSize, pointer, 3);
+		byte temp = tagItem.DataSize[0];
+		tagItem.DataSize[0] = tagItem.DataSize[2];
+		tagItem.DataSize[2] = temp;
+		bufferRead += 3;
+		pointer += 3;
 
-			//º∆À„“Ù°¢ ”∆µÕ¨≤Ω–≈œ¢
-			if (0 != vTimeStampReal && 0 != lastAudioTimeStamp) {
-				if ((int)vTimeStampReal < ((int)lastAudioTimeStamp) - STUTTER_TIME) {
-					syncInfo.audioLeadNum++;
-					syncInfo.audioLeadTimeAv += abs(int(vTimeStampReal - lastAudioTimeStamp));
-				}
-			}
-		}else if (TAG_TYPE_AUDIO == type) {
-			lastAudioTimeStamp = aTimeStampReal;
-			aTimeStampReal = (timeStampExt << 24) | timeStamp;
-			if (0 == aValidTimeStart){
-				aValidTimeStart = aTimeStampReal;
-			}else {
-				if (0 != aTimeStampReal - lastAudioTimeStamp) {
-					aValidTime.push_back(aTimeStampReal - lastAudioTimeStamp);
-				}
-			}
-			if (0 != aTimeStampReal) {
-				aValidTimeNum++;
-				aValidTimeSum = aTimeStampReal - aValidTimeStart;
-			}
+		memcpy(&tagItem.Timestamp, pointer, 3);
+		temp = tagItem.Timestamp[0];
+		tagItem.Timestamp[0] = tagItem.Timestamp[2];
+		tagItem.Timestamp[2] = temp;
+		bufferRead += 3;
+		pointer += 3;
 
-			//º∆À„“Ù°¢ ”∆µÕ¨≤Ω–≈œ¢
-			if (0 != lastVideoTimeStamp && 0 != lastAudioTimeStamp) {
-				if ((int)aTimeStampReal < ((int)lastVideoTimeStamp - STUTTER_TIME)) {
-					syncInfo.videoLeadNum++;
-					syncInfo.videoLeadTimeAv = abs(int(aTimeStampReal - lastVideoTimeStamp));
-				}
-			}
-		}
+		memcpy(&tagItem.TimestampExt, pointer, 1);
+		bufferRead += 1;
+		pointer += 1;
+		memcpy(&tagItem.StreamID, pointer, 3);
+		temp = tagItem.StreamID[0];
+		tagItem.StreamID[0] = tagItem.StreamID[2];
+		tagItem.StreamID[2] = temp;
+		bufferRead += 3;
+		pointer += 3;
 
-		TAG_INFO tagInfo;
-		tagInfo.tagtype = type;
-		tagInfo.tagsize = dataLength;
-		if (type == TAG_TYPE_AUDIO) {
-			tagInfo.timestamp = aTimeStampReal;
-			tagInfo.timestamp_sub = aTimeStampReal - lastAudioTimeStamp;
-		}else if (type == TAG_TYPE_VIDEO) {
-			tagInfo.timestamp = vTimeStampReal;
-			tagInfo.timestamp_sub = vTimeStampReal - lastVideoTimeStamp;
-		}else {
+		//tagtype == 8||9||18
+		uint32_t tagType = tagItem.TagType & 0x1f;
+		if (TAG_TYPE_AUDIO != tagType &&
+			TAG_TYPE_VIDEO != tagType &&
+			TAG_TYPE_SCRIPT != tagType) {
+			iRet = FLV_VIDEOTAG_UNKNOWN;
+			break;
+		}
+		count++;
+		//push back
+		vFlvTag.push_back(tagItem);
 
-		}
-		flvTagInfo.tagInfo.push_back(tagInfo);
-
-#ifdef VIDEO_SHOW_ONLY
-		if (type == TAG_TYPE_AUDIO) {
-#ifdef TIMESTAMP_TO_REALTIME
-			//◊™ªªtimeStamp
-			TimeStamp2RealTime(timeStamp, &realTime);
-			printf("|%10d|%10d|%11d|%s|%13d|%9d|\n", tagNum, type, dataLength, realTime, timeStampExt, streamid);
-#else
-			//printf("|%10d|%10d|%11d|%12d|%13d|%13d|%9d|\n", tagNum, type, dataLength, timeStamp, timeStampExt, vTimeStampReal - lastVideoTimeStamp, streamid);
-			printf("|%10d|%10d|%11d|%12d|%13d|%13d|%9d|\n", tagNum, type, dataLength, timeStamp, timeStampExt, aTimeStampReal - lastAudioTimeStamp, streamid);
-#endif
-		}
-#else
-#ifdef TIMESTAMP_TO_REALTIME
-		printf("|%10d|%10d|%11d|%s|%13d|%9d|\n", tagNum, type, dataLength, realTime, timeStampExt, streamid);
-#else
-		if (type == TAG_TYPE_VIDEO) {
-			printf("|%10d|%10d|%11d|%12d|%13d|%13d|%9d|\n", tagNum, type, dataLength, timeStamp, timeStampExt, vTimeStampReal - lastVideoTimeStamp, streamid);
-		}else {
-			printf("|%10d|%10d|%11d|%12d|%13d|%13d|%9d|\n", tagNum, type, dataLength, timeStamp, timeStampExt, aTimeStampReal - lastAudioTimeStamp, streamid);
-		}
-		
-#endif
-#endif
-		
-		//jump over non_audio and non_video frame£¨
+		//jump over non_audio and non_video frame
 		//jump over next previousTagSizen at the same time
-		if (type != TAG_TYPE_AUDIO && type != TAG_TYPE_VIDEO) {
-			fseek(flvFile, dataLength, SEEK_CUR);
-			fseek(flvFile, 4, SEEK_CUR);
-			continue;
+		//big end
+		dataSize = (tagItem.DataSize[2] << 16 & 0xff0000) | (tagItem.DataSize[1] << 8 & 0xff00) | (tagItem.DataSize[0] & 0xff);
+		if (tagItem.TagType != TAG_TYPE_AUDIO &&
+			tagItem.TagType != TAG_TYPE_VIDEO) {
+				bufferRead += dataSize;
+				pointer += dataSize;
+
+				bufferRead += 4;
+				pointer += 4;
+				continue;
 		}
-
-		//–£—ÈŒƒº˛¿‡–Õ
-		//‘› ±≤ª µœ÷
-
-		//–£—È“Ù°¢ ”∆µ ˝æ›
-		eRet = CheckBodyTag(flvFile, h264File, type, dataLength, videoNum, audioNum);
-		if (STREAM_OK != eRet) {
+		//decode
+		iRet = ParseBodyTag(pointer, length - bufferRead, H264file, tagItem.TagType, dataSize);
+		if (STREAM_OK != iRet) {
 			break;
 		}
-		
+		bufferRead += dataSize;
+		pointer += dataSize;
+
 		//check previousTagSizeN
 		uint32_t preTagSize = 0;
-		if (!ReadU32(&preTagSize, flvFile)) {
-			if (!feof(flvFile)) {
-				eRet = FILE_READ_ERROR;
-			}
-			break;
-		}else if(preTagSize != (dataLength + 11)){
-			eRet = FLV_TAGSIZE_NOTMATCH;
+		memcpy(&preTagSize, pointer, 4);		
+		preTagSize = HTON32(preTagSize);		//swap BIG END to Small End
+		if (preTagSize != (dataSize + 11)) {
+			iRet = FLV_TAGSIZE_NOTMATCH;
 			break;
 		}
+		bufferRead += 4;
+		pointer += 4;
 	}
-	flvTagInfo.audioNum = audioNum;
-	flvTagInfo.videoNum = videoNum;
-	flvTagInfo.length = vValidTimeSum;
-	flvTagInfo.size = mediaSize;
-
-	printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
-
-	if (realTime) {
-		free(realTime);
-		realTime = NULL;
-	}
-
-	return eRet;
+	
+	return iRet;
 }
 
-/**
-  *	@ –£—ÈFlv tag
-  * @ inout uint32_t bodyType
-  * 
-  * @ return check result
-  */
-static int h264space = 0x01000000;//H264ƒ⁄»›º‰∏Ù±Í ∂00000001
-unsigned int CheckBodyTag(FILE* flvFile, FILE** h264File, uint32_t tagType, uint32_t tagSize, int& videoNum, int& audioNum) {
-	unsigned int eRet = STREAM_OK;
+static int h264space = 0x01000000;
+unsigned int ParseBodyTag(FILE* flvFile, FILE** H264File, byte tagType, uint32_t tagSize) {
+    if (NULL == flvFile || NULL == *H264File) {
+        return FILE_NOT_EXSIT;
+    }
+    
+    unsigned int iRet = STREAM_OK;
+    uint32_t frameAndCode = 0;
+    uint32_t frameType = 0;
+    uint32_t codecID = 0;
+    uint32_t AVCPacketType = 0;
+    uint32_t compositionTime = 0;
+    uint32_t videoInfo = 0;
+    void* pBuf = NULL;
+    switch(tagType) {
+        case TAG_TYPE_AUDIO: {
+            pBuf = (void*)malloc(tagSize + 1);
+            if (!pBuf) {
+                iRet = BUFFER_MALLOC_FAILED;
+                break;
+            }
+            memset(pBuf, 0, tagSize + 1);
+            if (!fread(pBuf, 1, tagSize, flvFile)) {
+                iRet = BUFFER_READ_ERROR;
+                break;
+            }
+
+            break;
+        }
+        case TAG_TYPE_VIDEO:{
+            //Video Tag Header
+            if (!ReadU8(&frameAndCode, flvFile)){
+                iRet = BUFFER_READ_ERROR;
+                break;
+            }
+            frameType = frameAndCode & 0xF0;
+            frameType = frameType >> 4;
+            codecID = frameAndCode & 0x0F;
+            if (!ReadU8(&AVCPacketType, flvFile)) {
+                iRet = BUFFER_READ_ERROR;
+                break;
+            }
+            if (!ReadU24(&compositionTime, flvFile)) {
+                iRet = BUFFER_READ_ERROR;
+                break;
+            }
+            //Video Tag Body
+            if (frameType == 5) {
+                if (!ReadU8(&videoInfo, flvFile)) {
+                    iRet = BUFFER_READ_ERROR;
+                    break;
+                }
+                if (tagSize != (1+1+3+1)) {
+                    iRet = FLV_VIDEOTAGSIZE_NOTMATCH;
+                }
+            }else {
+                switch(codecID) {
+                    case 7: {
+                        uint32_t templength = 0;
+                        char* tempbuff = NULL;
+                        if (AVCPacketType == 0) {
+                            fseek(flvFile, 6,SEEK_CUR);
+                            ReadU16(&templength, flvFile);
+                            
+                            tempbuff = (char*)malloc(templength + 1);
+							memset(tempbuff, 0, templength + 1);
+                            fread(tempbuff, 1, templength, flvFile);
+                            fwrite(&h264space, 1, 4, *H264File);
+                            fwrite(tempbuff, 1, templength, *H264File);
+                            free(tempbuff);
+							tempbuff = NULL;
+                            
+                            ReadU8(&templength, flvFile);//ppsnum
+                            ReadU16(&templength, flvFile);//ppssize
+                            //printf("	ppsize:%d\n", templength);
+                            
+                            tempbuff = (char*)malloc(templength + 1);
+							memset(tempbuff, 0, templength + 1);
+                            fread(tempbuff, 1, templength, flvFile);
+                            fwrite(&h264space, 1, 4, *H264File);
+                            fwrite(tempbuff, 1, templength, *H264File);
+                            free(tempbuff);
+							tempbuff = NULL;
+                        }else {
+                            //printf("	One or more NALUs\n");
+                            //AVC NALU || AVC end of sequnce
+                            int countsize = 2 + 3;
+                            while (countsize < tagSize)
+                            {
+                                ReadU32(&templength, flvFile);
+                                tempbuff = (char*)malloc(templength + 1);
+								memset(tempbuff, 0, templength + 1);
+                                fread(tempbuff, 1, templength, flvFile);
+                                fwrite(&h264space, 1, 4, *H264File);
+                                fwrite(tempbuff, 1, templength, *H264File);
+                                free(tempbuff);
+								tempbuff = NULL;
+                                countsize += (templength + 4);
+                            }
+                        }
+                        
+                        break;
+                    }
+                    default:{
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+        case TAG_TYPE_SCRIPT: {
+            break;
+        }
+        default: {
+            break;
+        }
+    }
+    
+    //FREE BUFFER
+    if (pBuf) {
+        free(pBuf);
+        pBuf = NULL;
+    }
+    
+    return iRet;
+}
+unsigned int ParseBodyTag(byte* buffer, long length, FILE** H264File, byte tagType, uint32_t tagSize) {
+	if (NULL == *H264File) {
+		return FILE_NOT_EXSIT;
+	}
+	if (NULL == buffer || 0 == length) {
+		return DATA_BUFFER_NULL;
+	}
+	if (length < tagSize) {
+		return FLV_VIDEOTAG_UNKNOWN;
+	}
+	
+	unsigned int iRet = STREAM_OK;
 	uint32_t frameAndCode = 0;
 	uint32_t frameType = 0;
 	uint32_t codecID = 0;
@@ -305,103 +446,92 @@ unsigned int CheckBodyTag(FILE* flvFile, FILE** h264File, uint32_t tagType, uint
 	uint32_t videoInfo = 0;
 	void* pBuf = NULL;
 	switch(tagType) {
-		case TAG_TYPE_AUDIO:{
-			audioNum++;
+		case TAG_TYPE_AUDIO: {
 			pBuf = (void*)malloc(tagSize + 1);
 			if (!pBuf) {
-				eRet = BUFFER_MALLOC_FAILED;
+				iRet = BUFFER_MALLOC_FAILED;
 				break;
 			}
 			memset(pBuf, 0, tagSize + 1);
-			if (!fread(pBuf, 1, tagSize, flvFile)) {
-				eRet = BUFFER_READ_ERROR;
-				break;
-			}
+			memcpy(pBuf, buffer, tagSize);
 
 			break;
 		}
 		case TAG_TYPE_VIDEO:{
 			//Video Tag Header
-			videoNum++;
-			if (!ReadU8(&frameAndCode, flvFile)){
-				eRet = BUFFER_READ_ERROR;
-				break;
-			}
+			memcpy(&frameAndCode, buffer, 1);
 			frameType = frameAndCode & 0xF0;
 			frameType = frameType >> 4;
 			codecID = frameAndCode & 0x0F;
-			if (!ReadU8(&AVCPacketType, flvFile)) {
-				eRet = BUFFER_READ_ERROR;
-				break;
-			}
-			if (!ReadU24(&compositionTime, flvFile)) {
-				eRet = BUFFER_READ_ERROR;
-				break;
-			}
+			buffer += 1;
+
+			memcpy(&AVCPacketType, buffer, 1);
+			buffer += 1;
+			
+			memcpy(&compositionTime, buffer, 3);
+			buffer += 3;
 
 			//Video Tag Body
 			if (frameType == 5) {
-				if (!ReadU8(&videoInfo, flvFile)) {
-					eRet = BUFFER_READ_ERROR;
-					break;
-				}
-				if (videoInfo == 0) {
-					printf("Start of client-side seeking video frame sequence\n");
-				}else {
-					printf("End of client-side seeking video frame sequence\n");
-				}
+				memcpy(&videoInfo, buffer, 1);
+				buffer += 1;
 				if (tagSize != (1+1+3+1)) {
-					eRet = FLV_VIDEOTAGSIZE_NOTMATCH;
+					iRet |= FLV_VIDEOTAGSIZE_NOTMATCH;
 				}
 			}else {
 				switch(codecID) {
-					//AVC Ω‚¬Î
 					case 7: {
-						//printf("	AVC VIDEO PACKET\n");
 						uint32_t templength = 0;
-						char* tempbuff = NULL; 
+						char* tempbuff = NULL;
 						if (AVCPacketType == 0) {
-							//printf("	AVCDecoderConfigurationRecord\n");
-							// AVC sequence header
-							fseek(flvFile, 6,SEEK_CUR);
- 
-
-							ReadU16(&templength, flvFile);  
-							//printf("	sssize:%d\n", templength);  
-
-							tempbuff = (char*)malloc(templength);  
-							fread(tempbuff, 1, templength, flvFile);  
-							fwrite(&h264space, 1, 4, *h264File);  
-							fwrite(tempbuff, 1, templength, *h264File); 
-							free(tempbuff);  
-
-							ReadU8(&templength, flvFile);//ppsnum  
-
-							ReadU16(&templength, flvFile);//ppssize  
-							//printf("	ppsize:%d\n", templength);  
-
-							tempbuff = (char*)malloc(templength);  
-							fread(tempbuff, 1, templength, flvFile);  
-							fwrite(&h264space, 1, 4, *h264File);  
-							fwrite(tempbuff, 1, templength, *h264File);  
+							buffer += 6;				//?wangle
+							
+							memcpy(&templength, buffer, 2);
+							templength = HTON16(templength);		//swap big end to small end
+							buffer += 2;
+							
+							tempbuff = (char*)malloc(templength + 1);
+							memset(tempbuff, 0, templength + 1);
+							memcpy(tempbuff, buffer, templength);					
+							fwrite(&h264space, 1, 4, *H264File);
+							fwrite(tempbuff, 1, templength, *H264File);
 							free(tempbuff);
+							buffer += templength;
+
+							memcpy(&templength, buffer, 1);	//ppsnum
+							buffer += 1;
+							memcpy(&templength, buffer, 2);	//ppssize
+							templength = HTON16(templength);
+							buffer += 2;
+
+							tempbuff = (char*)malloc(templength + 1);
+							memset(tempbuff, 0, templength + 1);
+							memcpy(tempbuff, buffer, templength);
+							fwrite(&h264space, 1, 4, *H264File);
+							fwrite(tempbuff, 1, templength, *H264File);
+							free(tempbuff);
+							buffer += templength;
 						}else {
 							//printf("	One or more NALUs\n");
-
 							//AVC NALU || AVC end of sequnce
-							int countsize = 2 + 3;  
-							while (countsize < tagSize)  
-							{  
-								ReadU32(&templength, flvFile);  
-								tempbuff = (char*)malloc(templength);  
-								fread(tempbuff, 1, templength, flvFile); 
-								fwrite(&h264space, 1, 4, *h264File);  
-								fwrite(tempbuff, 1, templength, *h264File);  
-								free(tempbuff);  
-								countsize += (templength + 4);  
-							}  
+							int countsize = 2 + 3;
+							while (countsize < tagSize)
+							{
+								memcpy(&templength, buffer, 4);
+								templength = HTON32(templength);		//swap big end to small end
+								buffer += 4;
+								
+								tempbuff = (char*)malloc(templength + 1);
+								memset(tempbuff, 0, templength + 1);
+								memcpy(tempbuff, buffer, templength);
+								fwrite(&h264space, 1, 4, *H264File);
+								fwrite(tempbuff, 1, templength, *H264File);
+								free(tempbuff);
+								buffer += templength;
+
+								countsize += (templength + 4);
+							}
 						}
-						
 						break;
 					}
 					default:{
@@ -409,104 +539,283 @@ unsigned int CheckBodyTag(FILE* flvFile, FILE** h264File, uint32_t tagType, uint
 					}
 				}
 			}
-
 			break;
 		}
-		case TAG_TYPE_SCRIPT:
+		case TAG_TYPE_SCRIPT: {
 			break;
-		default:
+		}
+		default: {
 			break;
+		}
 	}
 
+	//FREE BUFFER
 	if (pBuf) {
 		free(pBuf);
 		pBuf = NULL;
 	}
-	return eRet;
+
+	return iRet;
+}
+unsigned int CheckFlvData(vector<TAG_INFO>& flvTagInfo, STATIC_INFO& statInfo, int model) {
+    unsigned int iRet = STREAM_OK;
+    uint32_t audioLastTimeStamp = 0;
+    uint32_t videoLastTimeStamp = 0;
+	uint32_t audioFirstDatatime = 0;
+	uint32_t videoFirstDatatime = 0;
+    bool bFirstAudioTag = true;
+    bool bFirstVideoTag = true;
+    uint32_t videoLength = 0;
+    
+    if (0 == model) {
+        for (vector<TAG_INFO>::iterator it = flvTagInfo.begin(); it != flvTagInfo.end(); ++it) {
+            statInfo.mediaSize += (*it).tagsize;
+            
+			//Any action, reset the status
+			if (ACTION_NORMAL != (*it).action) {
+				bFirstAudioTag = true;
+				bFirstVideoTag = true;
+			}
+
+            switch((*it).tagtype) {
+                case TAG_TYPE_AUDIO: {
+					statInfo.audioTagNum++;
+                    if ((*it).tagsize >= MIN_FLV_TAGSIZE) {
+                        if (bFirstAudioTag) {
+                            bFirstAudioTag = false;
+                            audioLastTimeStamp = (*it).timestamp;
+                            continue;
+                        }
+                        uint32_t timeStampSub = (int32_t)((*it).timestamp - audioLastTimeStamp);
+                        audioLastTimeStamp = (*it).timestamp;
+                        
+                        (*it).timestamp_sub = timeStampSub;
+                        statInfo.mediaLength += timeStampSub;
+                        if(AUDIO_STUTTER_NUM <= timeStampSub) {
+                           statInfo.aAbnormal.push_back(timeStampSub);
+                        }
+						if ((int32_t)((*it).timestamp - videoLastTimeStamp) >= STUTTER_TIME) {
+							statInfo.audioOnly++;
+						}
+                    }else {
+                        if (!bFirstAudioTag) {
+                            statInfo.aInvalid.push_back(*it);
+                        }
+                    }
+                    break;
+                }
+                case TAG_TYPE_VIDEO: {
+					statInfo.videoTagNum++;
+                    //data tag only
+                    if ((*it).tagsize >= MIN_FLV_TAGSIZE) {                    
+                        //jump over the first tag
+						if(bFirstVideoTag) {
+                            bFirstVideoTag = false;
+                            videoLastTimeStamp = (*it).timestamp;
+                            continue;
+                        }
+                        //caculate the tag sub, and record the latest video tag timestamp
+						uint32_t timeStampSub = (int32_t)((*it).timestamp - videoLastTimeStamp);
+                        videoLastTimeStamp = (*it).timestamp;
+                        
+                        (*it).timestamp_sub = timeStampSub;
+                        //caculate the length of the video that could play 
+                        videoLength += timeStampSub;
+                        //record video timestampsub which is unnormal
+                        if(VIDEO_STUTTER_NUM <= timeStampSub) {
+                            statInfo.vAbnormal.push_back(timeStampSub);
+                        }
+                        //caculate sync num(use video tag timestamp as stand)
+                        //if (abs((int32_t)((*it).timestamp - audioLastTimeStamp)) >= STUTTER_TIME) {
+                        //    statInfo.unsyncNum++;
+                        //}
+						if ((int32_t)((*it).timestamp - audioLastTimeStamp) >= STUTTER_TIME) {
+							statInfo.videoOnly++;
+						}
+                    }else {
+                        //the first tag contains some desc msg, it's normal that less than 80 byte
+                        if (!bFirstVideoTag) {
+                            statInfo.vInvalid.push_back(*it);
+                        }
+                    }
+                    break;
+                }
+                case TAG_TYPE_SCRIPT: {
+                    break;
+                }
+                default: {
+                    iRet |= FLV_VIDEOTAG_UNKNOWN;
+                    break;
+                }
+            }
+        }
+        
+        //caculate fps
+        if (0 != statInfo.mediaLength) {
+            statInfo.avFPS = statInfo.videoTagNum * 1000 / statInfo.mediaLength;
+        }
+		if (0 != videoLength) {
+			statInfo.realFPS = statInfo.videoTagNum * 1000 / videoLength;
+		}
+    }else {
+		uint32_t videoDatatimeTotal = 0;
+		uint32_t audioDatatimeTotal = 0;
+		for (vector<TAG_INFO>::iterator it = flvTagInfo.begin(); it != flvTagInfo.end(); ++it) {
+			statInfo.mediaSize += (*it).tagsize;
+
+			//Any action, reset the status
+			if (ACTION_NORMAL != (*it).action) {
+				bFirstAudioTag = true;
+				bFirstVideoTag = true;
+			}
+
+			switch((*it).tagtype) {
+				case TAG_TYPE_AUDIO: {
+					statInfo.audioTagNum++;
+					if ((*it).tagsize >= MIN_FLV_TAGSIZE) {
+						if (bFirstAudioTag) {
+							bFirstAudioTag = false;
+							audioLastTimeStamp = (*it).timestamp;
+							audioFirstDatatime = (*it).datatime;		//used for dynamic check
+							continue;
+						}
+						uint32_t timeStampSub = (int32_t)((*it).timestamp - audioLastTimeStamp);
+						audioLastTimeStamp = (*it).timestamp;
+
+						(*it).timestamp_sub = timeStampSub;
+						statInfo.mediaLength += timeStampSub;
+						audioDatatimeTotal += (int32_t)((*it).datatime - audioFirstDatatime);	//used for dynamic check
+
+						if(AUDIO_STUTTER_NUM <= timeStampSub) {
+							statInfo.aAbnormal.push_back(timeStampSub);
+						}
+						if ((int32_t)((*it).timestamp - videoLastTimeStamp) >= STUTTER_TIME) {
+							statInfo.audioOnly++;
+						}
+						if (audioDatatimeTotal > statInfo.mediaLength + AUDIO_STUTTER_NUM) {	//used for dynamic check
+							statInfo.aDynamicAb.push_back(audioDatatimeTotal - statInfo.mediaLength);
+						}
+					}else {
+						if (!bFirstAudioTag) {
+							statInfo.aInvalid.push_back(*it);
+						}
+					}
+					break;
+									 }
+				case TAG_TYPE_VIDEO: {
+					statInfo.videoTagNum++;
+					//data tag only
+					if ((*it).tagsize >= MIN_FLV_TAGSIZE) {                    
+						//jump over the first tag
+						if(bFirstVideoTag) {
+							bFirstVideoTag = false;
+							videoLastTimeStamp = (*it).timestamp;
+							videoFirstDatatime = (*it).datatime;		//used for dynamic check
+							continue;
+						}
+						//caculate the tag sub, and record the latest video tag timestamp
+						uint32_t timeStampSub = (int32_t)((*it).timestamp - videoLastTimeStamp);
+						videoLastTimeStamp = (*it).timestamp;
+
+						(*it).timestamp_sub = timeStampSub;
+						//caculate the length of the video that could play 
+						videoLength += timeStampSub;
+						videoDatatimeTotal += (int32_t)((*it).datatime - videoFirstDatatime);	//used for dynamic check
+
+						//record video timestampsub which is unnormal
+						if(VIDEO_STUTTER_NUM <= timeStampSub) {
+							statInfo.vAbnormal.push_back(timeStampSub);
+						}
+						//caculate sync num(use video tag timestamp as stand)
+						//if (abs((int32_t)((*it).timestamp - audioLastTimeStamp)) >= STUTTER_TIME) {
+						//    statInfo.unsyncNum++;
+						//}
+						if ((int32_t)((*it).timestamp - audioLastTimeStamp) >= STUTTER_TIME) {
+							statInfo.videoOnly++;
+						}
+						if (videoDatatimeTotal > videoLength + VIDEO_STUTTER_NUM) {	//used for dynamic check
+							statInfo.vDynamicAb.push_back(videoDatatimeTotal - videoLength);
+						}
+					}else {
+						//the first tag contains some desc msg, it's normal that less than 80 byte
+						if (!bFirstVideoTag) {
+							statInfo.vInvalid.push_back(*it);
+						}
+					}
+					break;
+									 }
+				case TAG_TYPE_SCRIPT: {
+					break;
+									  }
+				default: {
+					iRet |= FLV_VIDEOTAG_UNKNOWN;
+					break;
+					 }
+			}
+		}
+
+		//caculate fps
+		if (0 != statInfo.mediaLength) {
+			statInfo.avFPS = statInfo.videoTagNum * 1000 / statInfo.mediaLength;
+		}
+		if (0 != videoLength) {
+			statInfo.realFPS = statInfo.videoTagNum * 1000 / videoLength;
+		}
+    }
+    
+    //video and audio not sync
+	if (statInfo.videoOnly > 0) {
+		iRet |= FLV_VIDEO_ONLY;
+	}
+	if (statInfo.audioOnly > 0) {
+		iRet |= FLV_AUDIO_ONLY;
+	}
+
+    //video lag
+    if (statInfo.vAbnormal.size() > 0) {
+        iRet |= FLV_VIDEOSTAMP_EXCEPTION;
+    }
+    //audio lag
+    if (statInfo.aAbnormal.size() > 0) {
+        iRet |= FLV_AUDIOSTAMP_EXCEPTION;
+    }
+    //frame too low
+    if (statInfo.avFPS < STUTTER_FPS) {
+        iRet |= FLV_FPS_TOOLOW;
+    }
+    
+    return iRet;
 }
 
 /**
-  *	timeStamp◊™ ±º‰
-  *
-  */
-void TimeStamp2RealTime(uint32_t timeStamp, char** time) {
-	int hour = timeStamp/(3600*1000);  
-	timeStamp-= hour * 3600*1000;  
-	int minutes = timeStamp/(60*1000);  
-	timeStamp-= minutes * 60*1000;  
-	int seconds = timeStamp/1000;  
-	timeStamp-= seconds*1000;  
+ * @Â∞Ü‰ªéÊä•Êñá‰∏≠Ëß£ÊûêÂá∫Êù•ÁöÑÁªìÊûÑËΩ¨Âåñ‰∏∫‰æø‰∫éÈòÖËØªÁöÑÁªìÊûÑÔºåÂπ∂ËÆ∞ÂΩïflvTag‰∏ãËΩΩÂΩìÂâçÁöÑÁä∂ÊÄÅ(Âè™ËÆ∞ÂΩïÁ¨¨‰∏Ä‰∏™tagÁöÑÁä∂ÊÄÅ)
+ *
+ */
+void FormatFlvTag2TagInfo(vector<FLV_TAG> vFlvTag, vector<TAG_INFO>& vTagInfo, STREAM_ACTION action, uint32_t action_time) {
+    TAG_INFO tagInfoItem;
+	bool bRecord = false;
+	int size = vTagInfo.capacity();
+	for(vector<FLV_TAG>::iterator it = vFlvTag.begin(); it != vFlvTag.end(); it++) {
+		tagInfoItem.clear();
+        tagInfoItem.datatime = clock();
+        tagInfoItem.tagtype = (uint32_t)(*it).TagType;
+        uint32_t tagSize = ((*it).DataSize[2] << 16 & 0xff0000) | ((*it).DataSize[1] << 8 & 0xff00) | ((*it).DataSize[0] & 0xff);
+        tagInfoItem.tagsize = tagSize;
+        uint32_t timestamp = ((*it).TimestampExt << 24 & 0xff000000) | 
+								 ((*it).Timestamp[2] << 16 & 0xff0000) |
+						 ((*it).Timestamp[1] << 8 & 0xff00) |
+							 (*it).Timestamp[0];
+        tagInfoItem.timestamp = timestamp;
 
-	sprintf(*time, "%2d:%2d:%2d:%3d", hour, minutes, seconds, timeStamp);
-
-	return;
+		if (ACTION_NORMAL != action && !bRecord) {
+			tagInfoItem.action = action;
+			tagInfoItem.action_time = action_time;
+			bRecord = true;
+		}      
+        
+        vTagInfo.push_back(tagInfoItem);
+		size = vTagInfo.capacity();
+		int test = 0;
+    }
+    return;
 }
-unsigned int CheckFlvDataInfo(FLV_STAT_INFO& statInfo) { 
-	unsigned int eRet = STREAM_OK;
-
-	//∏˘æ›videoTag µƒstamptime…∏—°“Ï≥£÷µ
-	int iRet = PautaCheck(vValidTime, statInfo.vAbnormal, 4);
-	if (!iRet) {
-		for(vector<uint32_t>::iterator it = statInfo.vAbnormal.begin(); it != statInfo.vAbnormal.end(); it++) {
-			if (*it > STUTTER_NUM) {
-				eRet = FLV_VIDEOSTAMP_EXCEPTION;
-				break;
-			}
-		}
-	}
-	//∏˘æ›audioTag µƒstamptime…∏—°“Ï≥£÷µ
-	iRet = PautaCheck(aValidTime, statInfo.aAbnormal);
-	if (!iRet) {
-		for(vector<uint32_t>::iterator it = statInfo.aAbnormal.begin(); it != statInfo.aAbnormal.end(); it++) {
-			if (*it > STUTTER_NUM) {
-				eRet |= FLV_AUDIOSTAMP_EXCEPTION;
-				break;
-			}
-		}
-	}
-
-	//Õ≥º∆“Ù°¢ ”∆µ–≈œ¢
-	statInfo.videoNum = videoNum;
-	statInfo.audioNum = audioNum;
-	if (0 != averageTime) {
-		statInfo.avFps = 1000 / averageTime;
-	}else {
-		statInfo.avFps = 0;
-	}
-	if (statInfo.vAbnormal.size() > 0) {
-		for(vector<uint32_t>::iterator it = statInfo.vAbnormal.begin(); it != statInfo.vAbnormal.end(); it++) {
-			for(vector<uint32_t>::iterator it2 = vValidTime.begin(); it2 != vValidTime.end(); it2++) {
-				if (*it == *it2) {
-					vValidTime.erase(it2);
-					break;
-				}
-			}
-		}
-	}
-	long videoTimeSum = 0;
-	for(vector<uint32_t>::iterator it = vValidTime.begin(); it != vValidTime.end(); it++) {
-		videoTimeSum += *it;
-	}
-	if (videoTimeSum > 0) {
-		statInfo.exFps = 1000 * vValidTime.size() / videoTimeSum;
-		if (statInfo.exFps < 10) {		//”≤–¥À¿≥…10fps
-			eRet |= FLV_FPS_TOOLOW;
-		}
-	}
-	//Õ≥º∆“Ù ”∆µÕ¨≤Ω–≈œ¢
-	statInfo.syncInfo = syncInfo;
-	if (0 != syncInfo.audioLeadNum) {
-		eRet |= FLV_AUDIO_ONLY;
-	}
-	if (0 != syncInfo.videoLeadNum) {
-		eRet |= FLV_VIDEO_ONLY;
-	}
-
-	return eRet;
-}
-
-FLV_TAG_INFO GetFlvTagInfo() {
-	return flvTagInfo;
-}
-
-
