@@ -1,302 +1,458 @@
-#include <string>
-#include <stdio.h>
-#include <stdlib.h>
-#include <time.h>
+//
+//  StreamEval.cpp
+//  streamEval
+//
+//  Created by chenyu on 17/4/17.
+//  Copyright ¬© 2017Âπ¥ chenyu. All rights reserved.
+//
 
-#include "common.h"
-#include "Stream2File.h"
-#include "FlvCheck.h"
-#include "StreamCheck.h"
-#include "StreamEval.h"
+#include "StreamEval.hpp"
+#include "Stream2File.hpp"
+#include "FlvCheck.hpp"
+#include "BitStreamCheck.hpp"
 
-//#define RTMP_URL "rtmp://111.206.23.136/liveshow/rnjy_5f8c0c855787fa707a9dc855fc83e7d08daacde4"
-//#define RTMP_URL "rtmp://relay.live.video.qiyi.com:1935/liveshow/rnjy_75e8863e45763891003f151d56818bb9ae396517"
-//#define RTMP_URL "rtmp:\/\/live.hkstv.hk.lxdns.com/live/hks"
-//#define RTMP_URL "rtmp://10.15.243.70/myapp/livestream"
-//#define RTMP_URL "http:\/\/relay.live.video.qiyi.com:1935/liveshow/rtcq_130246e42c04f6d6068a654566cc4cd436de7875.flv&ip=10.221.32.43"
-//#define RTMP_URL "http://relay.live.video.qiyi.com:1935/liveugc/rodxtbj3_dkhh1c.flv&ip=10.15.110.62"
-//#define RTMP_URL "rtmp://10.11.50.195:1935/liveshow/rtcq_ddf066656871a016650f53e4f731c186600d0242"
-//–‹√®TV
-//#define RTMP_URL "http://pl8.live.panda.tv/live_panda/d8bad1ee3e3556ae04c288e3203c4770.flv?sign=f02d7ae65b0212bc03c12ea52b282e2f&ts=584e7259&rid=39914870"
-//ª®Ω∑
-//#define RTMP_URL "http://124.165.216.248/pl1.live.huajiao.com/live_huajiao_v2/_LC_ps1_non_2321080014815964061963833_SX.flv?wshc_tag=1&wsiphost=ipdbm"
-//ª¢—¿,≤¬≤‚ «–≠“È≤ª÷ß≥÷
-//#define RTMP_URL "http://hls.huanjuyun.com/newlive/82393037_2516755710.url?appId=0&ex_channelid=0&ex_spkuid=0&ex_coderate=0&ex_proto=bin&ex_cdn=1&ex_clientver=1437759&type=proxy&org=web&ex_proxy=62&ex_client=8"
+#if (defined (WIN32) || defined (WINDOWS) || defined(_WINDOWS_))  //windows
+#if defined _DEBUG
+#pragma comment(lib, "lib/lib_jsond.lib")
+#else
+#pragma comment(lib, "lib/lib_json.lib")
+#endif
+#endif
 
-#define MAX_DOWNLOAD_SIZE 2 * 1024 * 1024
-#define FLV_FILE "/home/chenyu/test/StreamEval/receive.flv"
-#define H264_FILE "/home/chenyu/test/StreamEval/h264file.h264"
-#define OUT_FILE "/home/chenyu/test/StreamEval/outFile.txt"
+static vector<TAG_INFO> s_vTagsInfo;
+static FILE* s_H264File = NULL;
 
-using namespace std;
-
-void PrintStaticInfo(FLV_STAT_INFO* statInfo) {
-
-	printf("\n\n");
-	printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
-	printf("|                            Video     Statistic      Info                                 |\n");
-	printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
-	//¥Ú”° ”∆µ–≈œ¢
-	printf("- Video Tag Num                       : %d\n", statInfo->videoNum);
-	printf("  - Video frame  Num                  : %d\n", statInfo->frame);
-	printf("    Video iFrame Num                  : %d\n", statInfo->iFrame);
-	printf("    Video pFrame Num                  : %d\n", statInfo->pFrame);
-	printf("    Video bFrame Num                  : %d\n", statInfo->bFrame);
-	printf("  - Video Fps Average\n");
-	printf("    Fps Average                       : %d(fps)\n", statInfo->avFps);
-	printf("    Fps Real                          : %d(fps)\n", statInfo->exFps);
-	if (statInfo->vAbnormal.size() > 0) {
-		printf("  - Video TimeStamp Abnormal          : %d\n", statInfo->vAbnormal.size());
-		for(vector<uint32_t>::iterator it = statInfo->vAbnormal.begin(); it != statInfo->vAbnormal.end(); it++) {
-			printf("    Abnormal TimeInterval             : %d(ms)\n", *it);
-		}
-		
-	}
-	if (statInfo->frameAbnormal > 0) {
-		printf("   Video Frame Abnormal               : %d\n", statInfo->frameAbnormal);
-	}
-	//¥Ú”°“Ù∆µ–≈œ¢
-	printf("- Audio Tag Num                       : %d\n", statInfo->audioNum);
-	if (statInfo->aAbnormal.size() > 0) {
-		printf("  - Audio TimeStamp Abnormal          : %d\n", statInfo->aAbnormal.size());
-		for(vector<uint32_t>::iterator it = statInfo->aAbnormal.begin(); it != statInfo->aAbnormal.end(); it++) {
-			printf("    Abnormal TimeInterval             : %d(ms)\n", *it);
-		}
-	}
-	//¥Ú”°“Ù°¢ ”∆µÕ¨≤Ω–≈œ¢
-	int audioLeadNum = statInfo->syncInfo.audioLeadNum;
-	int videoLeadNum = statInfo->syncInfo.videoLeadNum;
-	if (audioLeadNum > 0 || videoLeadNum > 0) {
-		printf("- Audio And Video TimeStamp Not Match \n");
-		if (audioLeadNum > 0) {
-			printf("  - AudioTime Ahead Of VideoTime Num. : %d\n", audioLeadNum);
-			printf("    AudioTime Leads VideoTime         : %d(ms)\n", statInfo->syncInfo.audioLeadTimeAv / audioLeadNum);
-		}
-		if (videoLeadNum > 0) {
-			printf("  - VideoTime Ahead Of AudioTime Num. : %d\n", videoLeadNum);
-			printf("    VideoTime Lead AudioTime          : %d\n", statInfo->syncInfo.videoLeadTimeAv / videoLeadNum);
-		}
-	}
+//ÂàùÂßãÂåñÂÖ®Â±ÄÂèòÈáè
+int Init(){
+    s_vTagsInfo.clear();
+    
+    if(NULL != s_H264File) {
+        fclose(s_H264File);
+        s_H264File = NULL;
+        if (0 != remove(H264_FILE_NAME)) {
+            return -1;
+        }
+    }
+    
+    s_H264File = fopen(H264_FILE_NAME, "wb+");
+    if (NULL == s_H264File) {
+        return -1;
+    }
+    
+    return 0;
+}
+//ÂèçÂàùÂßãÂåñ
+int UnInit() {
+    s_vTagsInfo.clear();
+    
+    if (NULL != s_H264File) {
+        fclose(s_H264File);
+        s_H264File = NULL;
+        if (0 != remove(H264_FILE_NAME)) {
+            return -1;
+        }      
+    }
+    return 0;
 }
 
-JSONCPP_STRING GenMediaInfo(unsigned int eRet, FLV_TAG_INFO flvTagInfo, vector<STREAM_SLICE_INFO> streamInfo, FLV_STAT_INFO statInfo, MEDIA_INFO mediaInfo, string fileInfo) {
-	Json::Value root;
-	// errono
-	root["errno"] = eRet;
+//Á†ÅÊµÅ‰∏ãË°åÔºåÂπ∂ÂÜôbuffer
+unsigned int Stream2File(FILE* outFile, char* streamUrl, int model, uint32_t param) {
+    if (NULL == outFile) {
+        return FILE_NOT_EXSIT;
+    }
+    
+    unsigned int iRet = STREAM_OK;
+    do {
+        if (string::npos != string(streamUrl).find("rtmp")) {
+            iRet = RTMPStreamToFlv(outFile, streamUrl, model, param);
+        }else {
+            iRet = HTTPStreamToFlv(outFile, streamUrl, model, param);
+        }
+        if (STREAM_OK != iRet) {
+            printf("HTTP/RTMP Stream download Failed: %s\n", GetErrorMsg(iRet).c_str());
+            break;
+        }
+    }while(false);
+    
+    return iRet;
+}
 
-	// error_info
-	Json::Value error_info;
-	error_info["fps"] = statInfo.avFps;
-	Json::Value lag;
-	Json::Value videolag;
-	for (vector<uint32_t>::iterator it = statInfo.vAbnormal.begin(); it != statInfo.vAbnormal.end(); ++it) {
-		if (*it > 250) {
-			videolag.append(*it);
-		}
-	}
-	Json::Value audiolag;
-	for (vector<uint32_t>::iterator it = statInfo.aAbnormal.begin(); it != statInfo.aAbnormal.end(); ++it) {
-		if (*it > 150) {
-			audiolag.append(*it);
-		}
-	}
-	lag["videolag"] = videolag;
-	lag["audiolag"] = audiolag;
-	error_info["lag"] =  lag;
-	Json::Value sync;
-	Json::Value video_ahead;
-	int video_ahead_num = statInfo.syncInfo.videoLeadNum;
-	if (video_ahead_num > 0) {
-		video_ahead["video_ahead_num"] = video_ahead_num;
-		video_ahead["video_ahead_time"] = statInfo.syncInfo.videoLeadTimeAv / video_ahead_num;
-	}
-	Json::Value audio_ahead;
-	int audio_ahead_num = statInfo.syncInfo.audioLeadNum;
-	if (audio_ahead_num > 0) {
-		audio_ahead["audio_ahead_num"] = audio_ahead_num;
-		audio_ahead["audio_ahead_time"] = statInfo.syncInfo.audioLeadTimeAv / audio_ahead_num;
-	}
-	sync["video_ahead"] = video_ahead;
-	sync["audio_ahead"] = audio_ahead;
-	error_info["sync"] =  sync;
-	root["error_info"] = error_info;
+//Ëß£ÊûêFLVÊñá‰ª∂
+unsigned int ParseMediaPackage(FILE* inFile, FLV_HEADER& header, vector<FLV_TAG>& vFlvTag, STREAM_ACTION action, int32_t action_time) {
+    if (NULL == inFile) {
+        return FILE_NOT_EXSIT;
+    }
+    
+    fseek(inFile, 0, SEEK_END);
+    long flvSize = ftell(inFile);
+    
+    unsigned int iRet = ParseFlvFile(inFile, &s_H264File, header, vFlvTag);
+    if (STREAM_OK != iRet) {
+        long errPos = ftell(inFile);
+        printf("The Stream Packet Formated Flv Failed: %s\n", GetErrorMsg(iRet).c_str());
+        printf("And Error Occured at %7ld , %7ld Byte left\n", errPos, flvSize - errPos);
+    }
+    
+    //transform FLV_TAG to TAG_INFO and pushback to global vector
+    FormatFlvTag2TagInfo(vFlvTag, s_vTagsInfo, action, action_time);
+    
+    return iRet;
+}
+unsigned int ParseMediaPackage(void* buffer, long length, FLV_HEADER& header, vector<FLV_TAG>& vFlvTag, STREAM_ACTION action, int32_t action_time) {
+    if (NULL == buffer || length <= 0) {
+        return DATA_BUFFER_NULL;
+    }
+    
+    long buffer_read = 0;
+    unsigned int iRet = ParseFlvFile(buffer, length, &s_H264File, header, vFlvTag, buffer_read);
+    if (STREAM_OK != iRet) {
+        printf("The Stream Packet Formated Flv Failed: %s\n", GetErrorMsg(iRet).c_str());
+        printf("And Error Occured at %7ld , %7ld Byte left\n", buffer_read, length - buffer_read);
+    }
+    
+    //transform FLV_TAG to TAG_INFO and pushback to global vector
+    FormatFlvTag2TagInfo(vFlvTag, s_vTagsInfo, action, action_time);
+    
+    return iRet;
+}
 
-	// media_info
-	Json::Value media_info;
-	media_info["size"] = flvTagInfo.size;
-	media_info["length"] = flvTagInfo.length / 1000;
-	media_info["mux_form"] = "flv";
-	media_info["encode_form"] = "H.264";
-	media_info["pic_size"] = mediaInfo.pic_size;
+//‰∏∫TSÈ¢ÑÁïô
+unsigned int ParseMediaPackage(FILE* inFile) {
+    return STREAM_OK;
+}
+unsigned int ParseMediaPackage(void* buffer, long length) {
+    return STREAM_OK;
+}
+
+//Ëß£ÊûêH264/H265 Slice‰ø°ÊÅØ
+unsigned int ParseMediaSlice(MEDIA_INFO& media_info, vector<NALU_t>& vNalu){
+    if (NULL == s_H264File) {
+        return FILE_NOT_EXSIT;
+    }
+    
+    fseek(s_H264File, 0, SEEK_SET);
+    unsigned int iRet = ParseBitStream(s_H264File, media_info, vNalu);
+    if (STREAM_OK != iRet) {
+        printf("The H264/H265 StreamData Formated Failed: %s\n", GetErrorMsg(iRet).c_str());
+    }
+    
+    return iRet;
+}
+
+JSONCPP_STRING StreamEval(unsigned int& errNum, MEDIA_INFO mediaInfo, vector<NALU_t> vNalu, STATIC_INFO& statInfo, string filePath, int model) {
+    //check Flv tag
+	if (s_vTagsInfo.size() > 0) {
+		errNum |= CheckFlvData(s_vTagsInfo, statInfo, model);
+	}
+    //check FLV NALU
+	if (vNalu.size() > 0) {
+		errNum |= CheckNalu(vNalu, statInfo);
+	}
+    //format to json
+    JSONCPP_STRING eval_result = Format2Json(errNum, s_vTagsInfo, vNalu, statInfo, mediaInfo, filePath);
+
+    return eval_result;
+}
+/**
+ * @ Âè™Ê†°È™åFlv tagÁõ∏ÂÖ≥‰ø°ÊÅØÔºå‰∏çÊ†°È™åÁºñÁ†Å‰ø°ÊÅØ
+ *
+ */
+JSONCPP_STRING StreamEval(unsigned int& errNum, MEDIA_INFO mediaInfo, STATIC_INFO& statInfo, string filePath, int model) {
+	//check Flv tag
+	if (s_vTagsInfo.size() > 0) {
+		errNum |= CheckFlvData(s_vTagsInfo, statInfo, model);
+	}
+
+    vector<NALU_t> vNalu;    
+    JSONCPP_STRING eval_result = Format2Json(errNum, s_vTagsInfo, vNalu, statInfo, mediaInfo, filePath);
+    
+    return eval_result;
+}
+unsigned int StreamEval(unsigned int& errNum, MEDIA_INFO mediaInfo, vector<NALU_t> vNalu, STATIC_INFO& statInfo, int model) {
+	//check Flv tag
+	if (s_vTagsInfo.size() > 0) {
+		errNum |= CheckFlvData(s_vTagsInfo, statInfo, model);
+	}
+	//check FLV NALU
+	if (vNalu.size() > 0) {
+		errNum |= CheckNalu(vNalu, statInfo);
+	}
+
+	return errNum;
+}
+JSONCPP_STRING StreamEval() {
+    JSONCPP_STRING eval_result;
+
+    return eval_result;
+}
+/**
+ * @ Ê†°È™åÁªìÊûúÊ†ºÂºèÂåñ‰∏∫json
+ * @ in unsigned int    :erro number
+ * @ in FLV_TAG_INFO    :FLV Tag ‰ø°ÊÅØ
+ * @ in vector<STREAM_SLICE_INFO>  :H264/H265 NALU‰ø°ÊÅØ
+ * @ in FLV_STAT_INFO   :FLV Tag && NALUÁªüËÆ°‰ø°ÊÅØ
+ * @ in MEDIA_INFO      :Ê†πÊçÆH264/H265Ëß£Á†ÅËé∑ÂæóÁöÑmedia‰ø°ÊÅØ
+ * @ in string          :Èü≥ËßÜÈ¢ëÊñá‰ª∂ÁöÑÂ≠òÂÇ®ÁõÆÂΩï
+ */
+JSONCPP_STRING Format2Json(unsigned int errNum, vector<TAG_INFO> flvTagInfo, vector<NALU_t> vNalu, STATIC_INFO statInfo, MEDIA_INFO mediaInfo, string fileInfo) {
+    Json::Value root;
+    // errono
+    root["error_num"] = errNum;
+    
+    // error_info
+    Json::Value error_info;
+    error_info["error_msg"] = GetErrorMsg(errNum);
 	Json::Value fps;
-	fps["fps_real"] = statInfo.exFps;
-	fps["fps_avg"] = statInfo.avFps;
-	media_info["fps"]  = fps;
-	if (flvTagInfo.length / 1000 != 0) {
-        media_info["bitrate"]  = (flvTagInfo.size + 9) / (flvTagInfo.length / 1000) * 8 / 1024;
-	}else {
+	fps["fps_average"] = statInfo.avFPS;
+	fps["fps_realplay"] = statInfo.realFPS;
+    error_info["fps"] = fps;
+    Json::Value lag;
+    Json::Value videolag;
+    for (vector<int32_t>::iterator it = statInfo.vAbnormal.begin(); it != statInfo.vAbnormal.end(); ++it) {
+        videolag.append(*it);
+    }
+    Json::Value audiolag;
+    for (vector<int32_t>::iterator it = statInfo.aAbnormal.begin(); it != statInfo.aAbnormal.end(); ++it) {
+        audiolag.append(*it);
+    }
+    lag["video_lag"] = videolag;
+    lag["audio_lag"] = audiolag;
+    error_info["lag_info"] = lag;
+	Json::Value sync_info;
+	sync_info["video_only"] = statInfo.videoOnly;
+	sync_info["audio_only"] = statInfo.audioOnly;
+    error_info["sync_info"] = sync_info;
+	Json::Value order_info;
+	Json::Value audio_error;
+	for (vector<int32_t>::iterator it = statInfo.aTransmitAb.begin(); it != statInfo.aTransmitAb.end(); ++it) {
+		audio_error.append(*it);
+	}
+	Json::Value video_error;
+	for (vector<int32_t>::iterator it = statInfo.vTransmitAb.begin(); it != statInfo.vTransmitAb.end(); ++it) {
+		video_error.append(*it);
+	}
+	order_info["audio_error"] = audio_error;
+	order_info["video_error"] = video_error;
+	error_info["order_info"] = order_info;
+    root["error_info"] = error_info;
+    
+    // media_info
+    Json::Value media_info;
+    media_info["size"] = statInfo.mediaSize;
+    media_info["length"] = statInfo.mediaLength / 1000;
+    media_info["fps"]  = fps;
+    if (statInfo.mediaLength!= 0) {
+        media_info["bitrate"]  = (statInfo.mediaSize + 9) / (statInfo.mediaLength / 1000) * 8 / 1024;
+    }else {
         media_info["bitrate"] = 0;
-	}
-	media_info["video_format"] = mediaInfo.video_format;
-	media_info["stream_type"] = mediaInfo.stream_type;
-	media_info["encoding_type"] = mediaInfo.encoding_type;
-	media_info["file_path"] = fileInfo;
-	root["media_info"] = media_info;
-
-	// packet info
-	Json::Value packet_info;
-	packet_info["videonum"] = statInfo.videoNum;
-	packet_info["audionum"] = statInfo.audioNum;
-	Json::Value tag_info;
-	for(vector<TAG_INFO>::iterator it = flvTagInfo.tagInfo.begin(); it != flvTagInfo.tagInfo.end(); ++it) {
-		Json::Value packetItem;
-		packetItem["tagtype"] = (*it).tagtype;
-		packetItem["tagsize"] = (*it).tagsize;
-		packetItem["tagstamp"] = (*it).timestamp;
-		packetItem["tagstamp_sub"] = (*it).timestamp_sub;
-		tag_info.append(packetItem);
-	}
-	packet_info["tag_info"] = tag_info;
-	root["packet_info"] = packet_info;
-
-	// frame info
-	Json::Value frame_info;
-	frame_info["islice"] = statInfo.iFrame;
-	frame_info["pslice"] = statInfo.pFrame;
-	frame_info["bslice"] = statInfo.bFrame;
-	Json::Value slice_info;
-	for(vector<STREAM_SLICE_INFO>::iterator it = streamInfo.begin(); it != streamInfo.end(); ++it) {
-		Json::Value sliceItem;
-		sliceItem["offset"] = (*it).offset;
-		sliceItem["length"] = (*it).length;
-		sliceItem["startcode"] = (*it).startcode;
-		sliceItem["naltype"] = (*it).nalTypeInfo;
-		sliceItem["info"] = (*it).nalInfo;
-		slice_info.append(sliceItem);
-	}	
-	frame_info["slice_info"] = slice_info;
-	root["frame_info"] = frame_info;
-
-	JSONCPP_STRING result_info = root.toStyledString();
-	
-	return result_info;
+    }
+	media_info["mux_form"] = "flv";
+	media_info["file_info"] = mediaInfo.file_info;
+	media_info["pic_size"] = mediaInfo.pic_size;
+    media_info["video_format"] = mediaInfo.video_format;
+    media_info["profile_info"] = mediaInfo.profile_info;
+    media_info["encoding_type"] = mediaInfo.encoding_type;
+    media_info["file_path"] = fileInfo;
+    root["media_info"] = media_info;
+    
+    // packet info
+    Json::Value packet_info;
+    packet_info["videoTagNum"] = statInfo.videoTagNum;
+    packet_info["audioTagNum"] = statInfo.audioTagNum;
+    Json::Value tag_info;
+    for(vector<TAG_INFO>::iterator it = flvTagInfo.begin(); it != flvTagInfo.end(); ++it) {
+        Json::Value packetItem;
+        packetItem["tagtype"] = (*it).tagtype;
+        packetItem["tagsize"] = (*it).tagsize;
+        packetItem["timestamp"] = (*it).timestamp;
+        packetItem["timestamp_sub"] = (*it).timestamp_sub;
+        tag_info.append(packetItem);
+    }
+    packet_info["tag_info"] = tag_info;
+    root["packet_info"] = packet_info;
+    
+    // frame info
+    Json::Value frame_info;
+    frame_info["slice_i"] = statInfo.slice_i;
+    frame_info["slice_p"] = statInfo.slice_p;
+    frame_info["slice_b"] = statInfo.slice_b;
+    frame_info["slice_si"] = statInfo.slice_si;
+    frame_info["slice_sp"] = statInfo.slice_sp;
+    frame_info["idr"] = statInfo.idr;
+    Json::Value slice_info;
+    vector<STREAM_NALU_INFO> streamNaluInfo;
+    CopyNalu2Info(vNalu, streamNaluInfo);
+    for(vector<STREAM_NALU_INFO>::iterator it = streamNaluInfo.begin(); it != streamNaluInfo.end(); ++it) {
+        Json::Value sliceItem;
+        sliceItem["offset"] = (*it).offset;
+        sliceItem["length"] = (*it).length;
+        sliceItem["startcode"] = (*it).startcode;
+        sliceItem["naltype"] = (*it).nalTypeInfo;
+        sliceItem["info"] = (*it).nalInfo;
+        slice_info.append(sliceItem);
+    }
+    frame_info["slice_info"] = slice_info;
+    root["frame_info"] = frame_info;
+    
+    JSONCPP_STRING eval_result = root.toStyledString();
+    return eval_result;
 }
 
-JSONCPP_STRING StreamEval(char* RTMP_URL, const char* filePath, char* fileSubName, int model, uint32_t param) {
-	unsigned int eRet = STREAM_OK;
-	FILE* flvFile = NULL;
-	FILE* h264File = NULL;
-	FILE* outFile = NULL;
-	char flvFileName[100] = {'0'};
-	char h264FileName[100] = {'0'};
-	char outFileName[100] = {'0'};
-	sprintf(flvFileName, "%s%s.flv", filePath, fileSubName);
-	sprintf(h264FileName, "%s%s.h264", filePath, fileSubName);
-	sprintf(outFileName, "%s%s.result", filePath, fileSubName);
-	
-	do {
-		// øøøø
-		if (2 == model) {
-			curl_global_init(CURL_GLOBAL_DEFAULT);
-      		CURL* curl = curl_easy_init();
-			int length = 0;
-			char* decode_url = curl_easy_unescape(curl, RTMP_URL, string(RTMP_URL).length(), &length);
-			flvFile = fopen(decode_url, "rb+");
-			curl_free(decode_url);
-			curl_easy_cleanup(curl);
-			curl_global_cleanup();
-			if (!flvFile) {
-				eRet = FILE_OPEN_FAILED;
-				break;
-			}
-		}else {
-			flvFile = fopen(flvFileName, "wb+");
-			if (!flvFile) {
-				eRet = FILE_OPEN_FAILED;
-				break;
-			}
-			if (string::npos != string(RTMP_URL).find("rtmp")) {
-				eRet = RTMPStreamToFlv(flvFile, RTMP_URL, model, param);
-			}else {
-				eRet = HTTPStreamToFlv(flvFile, RTMP_URL, model, param);
-			}
-		
-		}
-			
-		outFile = freopen(outFileName, "w+", stdout);
-		if (!outFile) {
-			eRet = FILE_OPEN_FAILED;
-			break;
-		}
-		
-		if (STREAM_OK != eRet) {
-			printf("HTTP/RTMP Stream download Failed: %s\n", GetErrorMsg(eRet).c_str());
-			break;
-		}
-		
-		//–£—Èflv±®Œƒ∏Ò Ω£¨≤¢Ã·»°h264bitstream
-		fseek(flvFile, 0, SEEK_END);
-		long flvSize = ftell(flvFile);
-		long errPos = 0;
-		fseek(flvFile, 0, SEEK_SET);
-
-		h264File = fopen(h264FileName, "wb+");
-		if (!h264File) {
-			eRet = FILE_OPEN_FAILED;
-			break;
-		}
-#if 1
-		eRet = CheckFlvFile(flvFile, &h264File);
-		if (STREAM_OK != eRet) {
-			errPos = ftell(flvFile);
-			printf("The Stream Packet Formated Flv Failed: %s\n", GetErrorMsg(eRet).c_str());
-			printf("And Error Occured at %5d , %5d Byte left\n", errPos, flvSize - errPos);
-		}
+void Format2Text(unsigned int errNum, vector<NALU_t> vNalu, STATIC_INFO statInfo, MEDIA_INFO mediaInfo){
+    /******************/
+    /** Flv Tag Info **/
+    /******************/
+	printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
+	printf("|                               Flv Tag Info                                         |\n");
+	printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
+	printf("|TagNum    |TagType   |TagSize    |TimeStamp   |timeStampExt |TimeStampSub |StreamID |\n");
+    
+    int tagNum = 1;
+#ifdef TIMESTAMP_TO_REALTIME
+    char* realTime = (char*)malloc(20);
+    memset(realTime, 0, 20);
 #endif
-
-#if 1	
-		//Ω‚Œˆh264bitstream
-		fseek(h264File, 0, SEEK_SET);
-		eRet = CheckBitStream(h264File);
-		if (STREAM_OK != eRet) {
-			printf("The H264/H265 StreamData Formated Failed: %s\n", GetErrorMsg(eRet).c_str());
-		}
+    for(vector<TAG_INFO>::iterator it = s_vTagsInfo.begin(); it != s_vTagsInfo.end(); ++it) {
+#ifdef TIMESTAMP_TO_REALTIME
+        TimeStamp2RealTime((*it).timestamp, &realTime);
+		printf("|%10d|%10d|%11d|%s|%13d|%9d|\n", tagNum, (*it).tagtype, (*it).tagsize, realTime, (*it).timestampExt, (*it).streamID);
+        //printf("|%10d|%10d|%11d|%12d|%13d|\n", tagNum, (*it).tagtype, (*it).tagsize, realTime, (*it).timestamp_sub);
+#else
+		printf("|%10d|%10d|%11d|%12d|%13d|%13d|%9d|\n", tagNum, (*it).tagtype, (*it).tagsize, (*it).timestampSrc, (*it).timestampExt, (*it).timestamp_sub, (*it).streamID);
+        //printf("|%10d|%10d|%11d|%12d|%13d|\n", tagNum, (*it).tagtype, (*it).tagsize, (*it).timestamp, (*it).timestamp_sub);
 #endif
-	}while(false);
+        tagNum++;
+    }
+	printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
 
-	//static
-	FLV_STAT_INFO statInfo;
-	if (STREAM_OK == eRet) {
-		eRet |= CheckFlvDataInfo(statInfo);
-		eRet |= CheckStreamDataInfo(statInfo.frameAbnormal);
-		GetVideoStreamInfo(statInfo);
-
-		PrintStaticInfo(&statInfo);
-		if (STREAM_OK != eRet) {
-			printf("\n");
-			printf("The Statistic Information of Stream Got an Exception: %s\n", GetErrorMsg(eRet).c_str());
-		}
+#ifdef TIMESTAMP_TO_REALTIME
+    if (realTime) {
+        free(realTime);
+        realTime = NULL;
+    }
+#endif
+    /******************/
+    /*** NALU Info ***/
+    /******************/
+    if (vNalu.size() > 0) {
+        if (FILE_H264 == vNalu[0].type) {
+            printf("The Video CodecID is 7 and the code type is H.264\n");
+        }else {
+            printf("The Video CodecID is 7 and the code type is H.265\n");
+        }
+        printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
+        printf("|                            Video  Tag  Information                                       |\n");
+        printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
+        printf("|No.   |Offset    |Length |Start Code  |NAL Type                             |Info         |\n");
+        
+        vector<STREAM_NALU_INFO> streamNaluInfo;
+        CopyNalu2Info(vNalu, streamNaluInfo);
+        int nalu_num = 1;
+        for (vector<STREAM_NALU_INFO>::iterator it = streamNaluInfo.begin(); it != streamNaluInfo.end(); ++it) {
+            printf("|%-6d|%08X  |%-7d|%-12s|%-37s|%-13s|\n", nalu_num, (*it).offset, (*it).length, (*it).startcode.c_str(), (*it).nalTypeInfo.c_str(), (*it).nalInfo.c_str());
+            nalu_num++;
+        }
+        printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
+        
+    }
+    
+    /******************/
+    /*** Media Info ***/
+    /******************/
+    printf("\n\n");
+    printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
+    printf("|                            Video               Info                                      |\n");
+    printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
+    if (vNalu.size() > 0) {
+        printf("%s File Information\r\n", mediaInfo.file_info.c_str());
+        printf("Picture Size \t: %s\n", mediaInfo.pic_size.c_str());
+        printf("Video Format \t: %s\n", mediaInfo.video_format.c_str());
+        printf("Stream Type \t: %s\n", mediaInfo.profile_info.c_str());
+        printf("Encoding Type \t: %s\n", mediaInfo.encoding_type.c_str());
+    }
+    
+    /******************/
+    /*** Static Info **/
+    /******************/
+    printf("\n\n");
+    printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
+    printf("|                            Video     Statistic      Info                                 |\n");
+    printf("|++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++|\n");
+    printf("- Video Tag Num.                       : %d\n", statInfo.videoTagNum);
+    printf("  - Video slice info\n");
+	printf("    Video iidr Num.                    : %d\n", statInfo.idr);
+	printf("    Video pSlice Num.                  : %d\n", statInfo.slice_p);
+    printf("    Video bSlice Num.                  : %d\n", statInfo.slice_b);
+	printf("    Video iSlice Num.                  : %d\n", statInfo.slice_i);
+    printf("    Video siSlice Num.                 : %d\n", statInfo.slice_si);
+    printf("    Video spSlice Num.                 : %d\n", statInfo.slice_sp);	   
+    printf("  - Video Fps Average                  : %d(fps)\n", statInfo.avFPS);
+	printf("  - Video Fps RealPlay                 : %d(fps)\n", statInfo.realFPS);
+    //video lag and invalid video tag
+    long lVAbnormal = statInfo.vAbnormal.size();
+    if (lVAbnormal > 0) {
+        printf("  - Video TimeStamp Abnormal           : %ld\n", lVAbnormal);
+        for (vector<int32_t>::iterator it = statInfo.vAbnormal.begin(); it != statInfo.vAbnormal.end(); ++it) {
+            printf("    Abnormal TimeInterval              : %d(ms)\n", *it);
+        }
+    }
+    long lVInvalid = statInfo.vInvalid.size();
+    if (lVInvalid > 0) {
+        printf("  - Video Tag Invalid                  : %ld\n", lVInvalid);
+        for (vector<TAG_INFO>::iterator it = statInfo.vInvalid.begin(); it != statInfo.vInvalid.end(); ++it) {
+            printf("    Invalid Video Tag Size             : %d(Byte)\n", (*it).tagsize);
+	        }
+    }
+    //audio lag and invalid audio tag
+	printf("- Audio Tag Num.                       : %d\n", statInfo.audioTagNum);
+    long lAAbnormal = statInfo.aAbnormal.size();
+    if (lAAbnormal > 0) {
+        printf("  - Audio TimeStamp Abnormal           : %ld\n", lAAbnormal);
+        for (vector<int32_t>::iterator it = statInfo.aAbnormal.begin(); it != statInfo.aAbnormal.end(); ++it) {
+            printf("    Abnormal TimeInterval              : %d(ms)\n", *it);
+        }
+    }
+    long lAVInvalid = statInfo.aInvalid.size();
+    if (lAVInvalid > 0) {
+        printf("  - Audio Tag Invalid                  : %ld\n", lAVInvalid);
+        for (vector<TAG_INFO>::iterator it = statInfo.aInvalid.begin(); it != statInfo.aInvalid.end(); ++it) {
+            printf("    Invalid Audio Tag Size             : %d(Byte)\n", (*it).tagsize);
+        }
+    }
+    //nuber of unsync
+    uint32_t video_only = statInfo.videoOnly;
+    if (video_only > 0) {
+		printf("\n");
+        printf("- There are %d(Total:%d) audio tags that could not play with the video!\n", video_only, statInfo.audioTagNum);
+    }
+	uint32_t audio_only = statInfo.audioOnly;
+	if (audio_only > 0) {
+		printf("\n");
+		printf("- There are %d(Total:%d) video tags that could not play with the audio!\n", audio_only, statInfo.videoTagNum);
 	}
-
-	FLV_TAG_INFO flvTagInfo = GetFlvTagInfo();
-	vector<STREAM_SLICE_INFO> streamInfo = GetStreamInfo();
-	MEDIA_INFO mediaInfo = GetMediaInfo();
-	JSONCPP_STRING mediaEvalInfo = GenMediaInfo(eRet, flvTagInfo, streamInfo, statInfo, mediaInfo, flvFileName);
-
-	//clean
-	if (flvFile) {
-		fclose(flvFile);
-		flvFile = NULL;
+    
+    /******************/
+    /*** Eval Result **/
+    /******************/
+    if (STREAM_OK != errNum) {
+        printf("\n");
+        printf("The Statistic Information of Stream Got an Exception: %s\n", GetErrorMsg(errNum).c_str());
+    }else {
+		printf("\n");
+		printf("The Live Stream is Normal~");
 	}
-	if (h264File) {
-		fclose(h264File);
-		h264File = NULL;
-	}
-	if (outFile) {
-		fflush(outFile);
-		fclose(outFile);
-		outFile = NULL;
-	}
+    return;
+}
 
-	return mediaEvalInfo;
+void TimeStamp2RealTime(uint32_t timeStamp, char** time) {
+    int hour = timeStamp/(3600*1000);
+    timeStamp-= hour * 3600*1000;
+    int minutes = timeStamp/(60*1000);
+    timeStamp-= minutes * 60*1000;
+    int seconds = timeStamp/1000;
+    timeStamp-= seconds*1000;
+    
+    sprintf(*time, "%2d:%2d:%2d:%3d", hour, minutes, seconds, timeStamp);
+    
+    return;
 }
